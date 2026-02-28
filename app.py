@@ -1,24 +1,22 @@
-import streamlit as st
+from flask import Flask, jsonify
 import mysql.connector
-import json
-import sys
+import os
 
-# Your TiDB config from secrets
-ti = st.secrets.tidb
+app = Flask(__name__)
+
+# Read from env vars (set in Render dashboard)
 db_config = {
-    "host": ti.host,
-    "port": ti.port,
-    "user": ti.user,
-    "password": ti.password,
-    "database": ti.database,
-    "ssl_ca": ti.ssl_ca,
+    "host": os.getenv("TIDB_HOST"),
+    "port": int(os.getenv("TIDB_PORT", 4000)),
+    "user": os.getenv("TIDB_USER"),
+    "password": os.getenv("TIDB_PASSWORD"),
+    "database": os.getenv("TIDB_DATABASE"),
+    "ssl_ca": os.getenv("TIDB_SSL_CA"),
     "ssl_verify_cert": True,
 }
 
-# Modern query params handling
-params = st.query_params
-
-if params.get("api", [None])[0] == "get_pins":
+@app.route('/get_pins', methods=['GET'])
+def get_pins():
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
@@ -26,15 +24,9 @@ if params.get("api", [None])[0] == "get_pins":
         row = cursor.fetchone()
         cursor.close()
         conn.close()
-
-        result = row or {"D0":0,"D1":0,"D2":0,"D3":0,"D4":0,"D5":0,"D6":0,"D7":0,"D8":0}
-        print(json.dumps(result))  # Raw output for ESP8266
-        sys.exit(0)
+        return jsonify(row or {"D0":0,"D1":0,"D2":0,"D3":0,"D4":0,"D5":0,"D6":0,"D7":0,"D8":0})
     except Exception as e:
-        print(json.dumps({"error": str(e)}))
-        sys.exit(0)
+        return jsonify({"error": str(e)}), 500
 
-# ── Normal app UI starts here ──
-st.title("Medical4 Pins Dashboard")
-st.write("Welcome to the control panel...")
-# ... your other widgets, buttons, etc.
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
