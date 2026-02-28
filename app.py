@@ -5,7 +5,7 @@ import time
 from langchain_groq import ChatGroq
 from langchain.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from streamlit.web import cli as stcli
+from streamlit.server.server import Server
 from flask import Flask, request, jsonify
 
 # ----------------------------
@@ -200,12 +200,12 @@ st.info("""
 app = Flask(__name__)
 
 @app.route("/read_pins", methods=["GET"])
-def read_pins():
+def read_pins_endpoint():
     pins = get_latest_pins()
     return jsonify({"pins": pins})
 
 @app.route("/update_status", methods=["POST"])
-def update_status():
+def update_status_endpoint():
     last_seen = int(time.time())
     try:
         conn = get_tidb_connection()
@@ -217,9 +217,5 @@ def update_status():
         pass
     return jsonify({"status":"online","last_seen":last_seen})
 
-if __name__ == "__main__":
-    import sys
-    if st._is_running_with_streamlit:
-        stcli.main()
-    else:
-        app.run(host="0.0
+# Attach Flask app to Streamlit server
+Server.get_current()._register_flask_app(app, "/")
