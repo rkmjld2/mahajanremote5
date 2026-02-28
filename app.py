@@ -3,7 +3,7 @@ import mysql.connector
 import json
 import sys
 
-# Your TiDB config from secrets.toml
+# Your TiDB config from secrets
 ti = st.secrets.tidb
 db_config = {
     "host": ti.host,
@@ -15,15 +15,10 @@ db_config = {
     "ssl_verify_cert": True,
 }
 
-# Check for API mode (support both query_params styles)
-try:
-    params = st.query_params.to_dict(flat=False)
-except AttributeError:
-    params = st.experimental_get_query_params()
+# Modern query params handling
+params = st.query_params
 
-api_value = params.get("api", [None])[0]
-
-if api_value == "get_pins":
+if params.get("api", [None])[0] == "get_pins":
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
@@ -33,13 +28,13 @@ if api_value == "get_pins":
         conn.close()
 
         result = row or {"D0":0,"D1":0,"D2":0,"D3":0,"D4":0,"D5":0,"D6":0,"D7":0,"D8":0}
-        print(json.dumps(result))  # Print directly → becomes raw response body
-        sys.exit(0)                # Hard exit to prevent any UI rendering
+        print(json.dumps(result))  # Raw output for ESP8266
+        sys.exit(0)
     except Exception as e:
         print(json.dumps({"error": str(e)}))
         sys.exit(0)
 
-# If not API mode → normal app UI
-st.title("Medical4 Pins Control")
-st.write("Normal dashboard here...")
-# ... rest of your UI code
+# ── Normal app UI starts here ──
+st.title("Medical4 Pins Dashboard")
+st.write("Welcome to the control panel...")
+# ... your other widgets, buttons, etc.
