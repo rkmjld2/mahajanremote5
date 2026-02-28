@@ -1,11 +1,9 @@
 import streamlit as st
 import mysql.connector
 import json
+import mysql.connector.constants  # for ClientFlag
 
-# ────────────────────────────────────────────────
-# 1. Load TiDB connection details from secrets.toml
-#    (paste your secrets in Streamlit Cloud dashboard)
-# ────────────────────────────────────────────────
+# ── TiDB config from secrets ──
 ti = st.secrets["tidb"]
 
 db_config = {
@@ -14,67 +12,38 @@ db_config = {
     "user": ti["user"],
     "password": ti["password"],
     "database": ti["database"],
-    "ssl_ca": ti["ssl_ca"],
+    "ssl_ca": ti["ssl_ca"],                 # your full PEM string
     "ssl_verify_cert": True,
-    "raise_on_warnings": True,
+    "ssl_verify_identity": False,           # optional relax if hostname mismatch
+    
+    # Fixes for SSL_CTX_set_default_verify_paths failed
+    "use_pure": True,                       # pure Python SSL → avoids C bugs
+    "client_flags": [mysql.connector.constants.ClientFlag.SSL],
 }
 
-# ────────────────────────────────────────────────
-# 2. Check if this is an API call from ESP8266
-# ────────────────────────────────────────────────
+# ── API check ──
 params = st.query_params
-
-# Modern & safe way — get the value of ?api=...
-api_mode = params.get("api", [None])[0] == "get_pins"
-
-if api_mode:
-    # ── API MODE ── only return JSON, no dashboard
+if params.get("api", [None])[0] == "get_pins":
     try:
-        # Connect to TiDB
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor(dictionary=True)
-
-        # Read the pins row (assuming one row exists)
-        cursor.execute("""
-            SELECT D0, D1, D2, D3, D4, D5, D6, D7, D8
-            FROM pins
-            LIMIT 1
-        """)
-
+        cursor.execute("SELECT D0,D1,D2,D3,D4,D5,D6,D7,D8 FROM pins LIMIT 1")
         row = cursor.fetchone()
-
         cursor.close()
         conn.close()
 
-        # If no row → return zeros
-        result = row if row else {
-            "D0": 0, "D1": 0, "D2": 0, "D3": 0,
-            "D4": 0, "D5": 0, "D6": 0, "D7": 0, "D8": 0
-        }
-
-        # Output pure JSON
+        result = row or {"D0":0,"D1":0,"D2":0,"D3":0,"D4":0,"D5":0,"D6":0,"D7":0,"D8":0}
         st.text(json.dumps(result))
-
-        # Stop here — do NOT render dashboard
         st.stop()
-
     except Exception as e:
-        error_result = {"error": str(e)}
-        st.text(json.dumps(error_result))
+        st.text(json.dumps({"error": str(e)}))
         st.stop()
 
-# ────────────────────────────────────────────────
-# 3. Normal dashboard (only shown when NOT in API mode)
-# ────────────────────────────────────────────────
-
+# ── Normal dashboard ──
 st.title("Medical4 Pins Dashboard")
 st.write("Welcome to the control panel...")
 
-st.markdown("---")
-
-st.subheader("Current pin states from database")
-
-# Optional: show current pins in the dashboard too
+st.subheader("Current Pin States")
 try:
     conn = mysql.connector.connect(**db_config)
     cursor = conn.cursor(dictionary=True)
@@ -84,18 +53,10 @@ try:
     conn.close()
 
     if row:
-        st.json(row)  # nice formatted view in dashboard
+        st.json(row)
     else:
-        st.info("No pins row found in database.")
-
+        st.info("No pins row found.")
 except Exception as e:
     st.error(f"Could not read pins: {e}")
 
-st.markdown("---")
-
-st.info("Use this URL for ESP8266:  \nhttps://your-app-name.streamlit.app/?api=get_pins")
-
-# You can add more controls here later (buttons to change pins, etc.)
-# Example:
-# if st.button("Turn all ON"):
-#     # update database code here...
+st.info("ESP8266 API URL:\nhttps://mahajanremote5.streamlit.app/?api=get_pins")
