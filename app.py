@@ -1,10 +1,17 @@
 import streamlit as st
 import mysql.connector
 import json
-import mysql.connector.constants  # for ClientFlag
+import tempfile
+import os
+import mysql.connector.constants
 
 # ── TiDB config from secrets ──
 ti = st.secrets["tidb"]
+
+# Write the PEM string to a temporary file (fixes "filename too long" error)
+with tempfile.NamedTemporaryFile(delete=False, suffix='.pem') as temp_ca_file:
+    temp_ca_file.write(ti["ssl_ca"].encode('utf-8'))  # write the multi-line string as bytes
+    temp_ca_path = temp_ca_file.name
 
 db_config = {
     "host": ti["host"],
@@ -12,16 +19,21 @@ db_config = {
     "user": ti["user"],
     "password": ti["password"],
     "database": ti["database"],
-    "ssl_ca": ti["ssl_ca"],                 # your full PEM string
-    "ssl_verify_cert": True,
-    "ssl_verify_identity": False,           # optional relax if hostname mismatch
     
-    # Fixes for SSL_CTX_set_default_verify_paths failed
-    "use_pure": True,                       # pure Python SSL → avoids C bugs
+    "ssl_ca": temp_ca_path,                 # ← now a real short file path
+    "ssl_verify_cert": True,
+    "ssl_verify_identity": False,           # optional: relax if hostname issues
+    
+    "use_pure": True,                       # pure Python → helps with SSL quirks
     "client_flags": [mysql.connector.constants.ClientFlag.SSL],
 }
 
-# ── API check ──
+# Clean up temp file after use (optional but good practice)
+def cleanup_temp():
+    if os.path.exists(temp_ca_path):
+        os.unlink(temp_ca_path)
+
+# ── API mode for ESP8266 ──
 params = st.query_params
 if params.get("api", [None])[0] == "get_pins":
     try:
@@ -38,6 +50,8 @@ if params.get("api", [None])[0] == "get_pins":
     except Exception as e:
         st.text(json.dumps({"error": str(e)}))
         st.stop()
+    finally:
+        cleanup_temp()
 
 # ── Normal dashboard ──
 st.title("Medical4 Pins Dashboard")
@@ -55,8 +69,10 @@ try:
     if row:
         st.json(row)
     else:
-        st.info("No pins row found.")
+        st.info("No pins row found in table.")
 except Exception as e:
     st.error(f"Could not read pins: {e}")
+finally:
+    cleanup_temp()
 
 st.info("ESP8266 API URL:\nhttps://mahajanremote5.streamlit.app/?api=get_pins")
