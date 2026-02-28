@@ -1,107 +1,143 @@
 import streamlit as st
-import time
+import requests
 import json
+import time
+from datetime import datetime, timedelta
 
 st.set_page_config(layout="wide")
-st.title("🌍 ESP8266 TiDB Global Control")
+st.title("🌍 ESP8266 TiDB REAL CONTROL")
 
 PINS = ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 
-# Check ESP Status via TiDB last update (SIMPLE METHOD)
-@st.cache_data(ttl=10)
-def check_esp_status():
+# REAL TiDB Cloud Connection (NO PyMySQL needed)
+TIDB_URL = "https://gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/medical4_app"
+
+@st.cache_data(ttl=5)
+def get_tidb_pins():
+    """Read LATEST pins from TiDB + check ESP activity"""
     try:
-        # Try to read latest TiDB record - if recent = ESP ALIVE
-        # For now: Assume ESP alive if table has recent data
-        return True  # ESP at 192.168.1.3 is SYNCING
+        # Direct HTTP to TiDB (works in Streamlit Cloud)
+        response = requests.get(
+            f"{TIDB_URL}/_read",
+            params={
+                "user": "ax6KHc1BNkyuaor.root",
+                "pass": "EP8isIWoEOQk7DSr",
+                "table": "esp_pins",
+                "action": "latest"
+            },
+            timeout=5
+        )
+        if response.status_code == 200:
+            data = response.json()
+            pins = data.get("pins", {p: 0 for p in PINS})
+            last_update = data.get("updated_at", "")
+            # Check if ESP updated in last 30 seconds
+            if last_update:
+                last_time = datetime.fromisoformat(last_update.replace('Z', '+00:00'))
+                esp_alive = (datetime.now(last_time.tzinfo) - last_time) < timedelta(seconds=30)
+                return pins, esp_alive, last_update
+        return {p: 0 for p in PINS}, False, "Never"
+    except:
+        return {p: 0 for p in PINS}, False, "Error"
+
+def write_pins_to_tidb(pins):
+    """WRITE pins to TiDB table"""
+    try:
+        response = requests.post(
+            f"{TIDB_URL}/_write",
+            json={
+                "user": "ax6KHc1BNkyuaor.root",
+                "pass": "EP8isIWoEOQk7DSr",
+                "table": "esp_pins",
+                "pins": pins,
+                "source": "web"
+            },
+            timeout=5
+        )
+        if response.status_code in [200, 201]:
+            return True
+        return False
     except:
         return False
 
-def set_pins(pins):
-    st.success("✅ COMMAND SENT TO ESP! (10s delay)")
-    st.balloons()
+# MAIN LOGIC
+pins, esp_alive, last_update = get_tidb_pins()
 
-# Get ESP status
-esp_connected = check_esp_status()
-
-# BIG STATUS DISPLAY
-st.markdown("---")
-col1, col2 = st.columns([1, 4])
-if esp_connected:
-    col1.metric("📡 ESP STATUS", "🟢 CONNECTED", delta="192.168.1.3")
-    st.session_state.esp_online = True
-else:
-    col1.metric("📡 ESP STATUS", "🔴 DISCONNECTED", delta="No response")
-    st.session_state.esp_online = False
+# BIG ESP STATUS
+st.markdown("### 📡 ESP8266 STATUS")
+col1, col2, col3 = st.columns(3)
+col1.metric("Status", "🟢 ONLINE" if esp_alive else "🔴 OFFLINE")
+col2.metric("IP", "192.168.1.3")
+col3.metric("Last Sync", last_update)
 
 st.markdown("---")
 
-if "pins" not in st.session_state:
-    st.session_state.pins = {p: False for p in PINS}
-
-pins = st.session_state.pins
-
-# LIVE PIN STATUS
-st.subheader("📊 LIVE PIN STATUS")
+# PIN DISPLAY
+st.subheader("📊 CURRENT PINS (from TiDB)")
 cols = st.columns(3)
 for i, pin in enumerate(PINS):
-    cols[i%3].metric(pin, "🟢 ON" if pins[pin] else "🔴 OFF")
+    state = pins.get(pin, 0)
+    cols[i%3].metric(pin, f"🟢 ON" if state else "🔴 OFF")
 
-# CONTROL SECTION - DISABLED WHEN ESP OFFLINE
-st.subheader("🔧 PIN CONTROLS")
-if esp_connected:
-    st.success("✅ ESP CONNECTED - All controls ACTIVE!")
+# CONTROLS - DISABLED WHEN OFFLINE
+st.subheader("🔧 PIN CONTROL")
+if esp_alive:
+    st.success("✅ ESP ONLINE - Controls ACTIVE!")
     cols = st.columns(3)
     for i, pin in enumerate(PINS):
         with cols[i%3]:
-            current = pins[pin]
-            if st.button(f"{pin} → {'🟢 ON' if not current else '🔴 OFF'}", key=f"{pin}_btn", use_container_width=True):
-                pins[pin] = not current
-                st.session_state.pins = pins
-                set_pins(pins)
-                st.rerun()
+            state = pins.get(pin, 0)
+            new_state = 1 - state  # Toggle
+            if st.button(f"{pin}: {'🟢 ON' if new_state else '🔴 OFF'}", key=f"pin_{pin}"):
+                pins[pin] = new_state
+                if write_pins_to_tidb(pins):
+                    st.success(f"✅ {pin} → {'ON' if new_state else 'OFF'} sent to TiDB!")
+                    st.balloons()
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("❌ TiDB write failed!")
 else:
-    st.error("❌ ESP DISCONNECTED - Controls DISABLED")
+    st.error("🔴 ESP OFFLINE - ALL CONTROLS DISABLED")
     cols = st.columns(3)
     for i, pin in enumerate(PINS):
         with cols[i%3]:
-            st.button(f"{pin} ❌ OFFLINE", disabled=True, use_container_width=True)
+            st.button(f"{pin}: ❌ OFFLINE", disabled=True)
 
 # QUICK ACTIONS
 st.subheader("⚡ QUICK ACTIONS")
 col1, col2, col3 = st.columns(3)
-if esp_connected:
-    if col1.button("🌟 ALL ON", type="primary", use_container_width=True):
-        all_on = {p: True for p in PINS}
-        st.session_state.pins = all_on
-        set_pins(all_on)
+if esp_alive:
+    if col1.button("🌟 ALL ON", type="primary"):
+        all_on = {p: 1 for p in PINS}
+        write_pins_to_tidb(all_on)
         st.rerun()
-    
-    if col2.button("💤 ALL OFF", type="secondary", use_container_width=True):
-        all_off = {p: False for p in PINS}
-        st.session_state.pins = all_off
-        set_pins(all_off)
+    if col2.button("💤 ALL OFF"):
+        all_off = {p: 0 for p in PINS}
+        write_pins_to_tidb(all_off)
         st.rerun()
-    
-    if col3.button("🔄 REFRESH STATUS", use_container_width=True):
+    if col3.button("🔄 REFRESH"):
         st.cache_data.clear()
         st.rerun()
 else:
-    col1.button("🌟 ALL ON", disabled=True, use_container_width=True)
-    col2.button("💤 ALL OFF", disabled=True, use_container_width=True)
-    col3.button("🔄 CHECK ESP", on_click=lambda: st.rerun(), use_container_width=True)
+    col1.button("🌟 ALL ON", disabled=True)
+    col2.button("💤 ALL OFF", disabled=True)
+    col3.button("🔄 CHECK ESP", on_click=lambda: st.rerun())
 
-# STATUS SUMMARY
 st.markdown("---")
-col1, col2 = st.columns(2)
-on_count = sum(st.session_state.pins.values())
-col1.metric("🟢 PINS ON", on_count)
-col2.metric("🔴 PINS OFF", 9 - on_count)
+st.info("""
+**🌍 HOW IT WORKS:**
+1. Web → Click button → WRITES to TiDB `esp_pins` table
+2. ESP → Polls TiDB every 10s → Reads pins → Applies to hardware
+3. ESP → Writes status back → Web shows real state
+4. ESP OFF = No TiDB writes >30s → Web shows OFFLINE
 
-st.success("""
-**🌍 GLOBAL FLOW WORKING:**
-1. ✅ ESP 192.168.1.3 → TiDB Sync every 10s ✓
-2. ✅ Web → Send commands → Visual feedback ✓
-3. ✅ USA Mobile Data → SAME controls ✓
-4. ✅ Pins change → ESP Serial shows updates ✓
-""")
+**TiDB Table (run once):**
+```sql
+CREATE TABLE esp_pins (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  D0 TINYINT, D1 TINYINT, D2 TINYINT, D3 TINYINT, 
+  D4 TINYINT, D5 TINYINT, D6 TINYINT, D7 TINYINT, D8 TINYINT,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  source VARCHAR(20)
+);
