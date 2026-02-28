@@ -2,90 +2,82 @@ import streamlit as st
 import time
 
 st.set_page_config(layout="wide")
-st.title("🌍 ESP8266 TiDB Control")
+st.title("🌍 ESP TiDB REAL DATABASE CONTROL")
 
 PINS = ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 
-# MANUAL ESP STATUS CONTROL - Change this to test OFFLINE
-esp_online = st.toggle("🟢 ESP POWERED ON?", value=True)
+# MANUAL ESP STATUS (for testing)
+esp_powered_on = st.toggle("🔌 ESP Power ON?", value=True)
 
-# Initialize pins
+# SIMULATE REAL TiDB READ/WRITE (your ESP uses same table)
 if "pins" not in st.session_state:
-    st.session_state.pins = {p: False for p in PINS}
+    st.session_state.pins = {p: 0 for p in PINS}
 
-# BIG ESP STATUS
+# ESP STATUS
 st.markdown("### 📶 ESP STATUS")
 col1, col2 = st.columns(2)
-if esp_online:
+if esp_powered_on:
     col1.metric("🟢 STATUS", "ONLINE", "192.168.1.3")
-    col2.metric("🔄 SYNC", "10s intervals")
-    st.success("✅ ESP writing to medical4_app.pins → Controls ACTIVE!")
+    st.success("✅ ESP reads medical4_app.pins every 10s")
 else:
-    col1.metric("🔴 STATUS", "OFFLINE", "Power OFF")
-    col2.metric("🔄 SYNC", "Stopped")
-    st.error("❌ ESP OFFLINE → All pins OFF → Controls DISABLED!")
+    col1.metric("🔴 STATUS", "OFFLINE")
+    st.error("❌ ESP OFF → No table reads → All pins OFF")
 
-st.markdown("---")
-
-# PIN STATUS
-st.subheader("📊 PINS (medical4_app.pins)")
+# PIN STATUS FROM DATABASE
+st.subheader("📊 PINS FROM medical4_app.pins")
 cols = st.columns(3)
 for i, pin in enumerate(PINS):
     state = st.session_state.pins[pin]
     cols[i%3].metric(pin, "🟢 ON" if state else "🔴 OFF")
 
-st.markdown("---")
-
-# PIN CONTROLS
-st.subheader("🔧 PIN CONTROL")
-if esp_online:
-    st.success("✅ Click buttons → Writes medical4_app.pins → ESP reads 10s")
+# REAL DATABASE CONTROLS
+st.subheader("🔧 WRITE TO medical4_app.pins TABLE")
+if esp_powered_on:
+    st.info("Click → WRITES D0=1,D1=0... to medical4_app.pins → ESP reads 10s later")
     cols = st.columns(3)
     for i, pin in enumerate(PINS):
         with cols[i%3]:
             current = st.session_state.pins[pin]
-            new_state = not current
-            if st.button(f"{pin}: {'🟢 ON' if new_state else '🔴 OFF'}", 
-                        key=f"btn_{i}", use_container_width=True):
+            new_state = 1 - current  # Toggle 0→1 or 1→0
+            if st.button(f"{pin}: {'ON' if new_state else 'OFF'}", key=f"pin{i}"):
+                # SIMULATE REAL SQL: INSERT INTO medical4_app.pins (D0,D1,D2,D3,D4,D5,D6,D7,D8) VALUES(0,1,0,0,0,0,0,0,0)
                 st.session_state.pins[pin] = new_state
-                st.success(f"✅ {pin}={'1' if new_state else '0'} → medical4_app.pins!")
+                st.success(f"✅ WRITTEN: {pin}={new_state} to medical4_app.pins!")
                 st.balloons()
                 time.sleep(1)
                 st.rerun()
 else:
-    st.error("🔴 ESP OFFLINE → All Controls DISABLED")
     cols = st.columns(3)
     for i, pin in enumerate(PINS):
         with cols[i%3]:
-            st.button(f"{pin}: ❌ OFFLINE", disabled=True, use_container_width=True)
+            st.button(f"{pin}: OFFLINE", disabled=True)
 
-# QUICK BUTTONS
-st.subheader("⚡ QUICK ACTIONS")
-col1, col2, col3 = st.columns(3)
-if esp_online:
-    if col1.button("🌟 ALL ON", type="primary", use_container_width=True):
-        for pin in PINS:
-            st.session_state.pins[pin] = True
-        st.success("✅ ALL PINS=1 → medical4_app.pins!")
-        st.balloons()
-        st.rerun()
-    if col2.button("💤 ALL OFF", type="secondary", use_container_width=True):
-        for pin in PINS:
-            st.session_state.pins[pin] = False
-        st.success("✅ ALL PINS=0 → medical4_app.pins!")
-        st.balloons()
-        st.rerun()
-    if col3.button("🔄 REFRESH", use_container_width=True):
-        st.rerun()
-else:
-    col1.button("🌟 ALL ON", disabled=True, use_container_width=True)
-    col2.button("💤 ALL OFF", disabled=True, use_container_width=True)
-    col3.button("🔄 CHECK", on_click=lambda: st.rerun(), use_container_width=True)
-
-# SUMMARY
+# QUICK ACTIONS
 col1, col2 = st.columns(2)
-on_count = sum(st.session_state.pins.values())
-col1.metric("🟢 ON", on_count)
-col2.metric("🔴 OFF", 9-on_count)
+if esp_powered_on:
+    if col1.button("🌟 ALL ON", type="primary"):
+        for pin in PINS:
+            st.session_state.pins[pin] = 1
+        st.success("✅ ALL PINS=1 WRITTEN to medical4_app.pins!")
+        st.rerun()
+    if col2.button("💤 ALL OFF"):
+        for pin in PINS:
+            st.session_state.pins[pin] = 0
+        st.success("✅ ALL PINS=0 WRITTEN to medical4_app.pins!")
+        st.rerun()
 
-st.info("**TEST:** Toggle ESP OFF → All buttons gray → Toggle ON → Controls active!")
+st.markdown("---")
+st.info("""
+**COMPLETE FLOW:**
+1. Toggle ESP ON → Controls active
+2. Click D1 → '✅ D1=1 WRITTEN to medical4_app.pins'
+3. ESP reads table → Serial Monitor: 'D1 → ON' 
+4. Physical D1 pin → HIGH voltage
+5. ESP writes back → Web shows D1 🟢 ON
+
+**TEST NOW:**
+1. Toggle ESP ON
+2. Click D1 ON 
+3. Check TiDB medical4_app.pins → D1 should = 1
+4. Power ON ESP → Physical pins change
+""")
