@@ -1,7 +1,6 @@
 import streamlit as st
 import time
 
-st.set_page_config(page_title="Test App", layout="wide")
 st.title("🚀 Streamlit Cloud Test")
 
 if st.button("Click Me"):
