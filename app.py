@@ -3,6 +3,17 @@ import mysql.connector
 import json
 import tempfile
 import os
+
+# 🔧 API BYPASS - ADD THIS FIRST
+if st.query_params.get("api"):
+    # Disable auth for API calls only
+    os.environ["suppress_st_warning"] = "true"
+    st._main._is_running_with_streamlit_server = False
+
+# Your existing imports and code...
+
+
+
 import mysql.connector.constants
 
 # ── TiDB config from secrets ──
@@ -139,3 +150,4 @@ with st.form("update_pins_form"):
 # ── Info ──
 st.markdown("---")
 st.info("ESP8266 reads from:\n**https://mahajanremote5.streamlit.app/?api=get_pins**")
+
