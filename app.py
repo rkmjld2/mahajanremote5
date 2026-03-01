@@ -8,9 +8,9 @@ import mysql.connector.constants
 # ── TiDB config from secrets ──
 ti = st.secrets["tidb"]
 
-# Write PEM certificate to temp file
-with tempfile.NamedTemporaryFile(delete=False, suffix=".pem") as temp_ca_file:
-    temp_ca_file.write(ti["ssl_ca"].encode("utf-8"))
+# Write PEM certificate to temp file (fixes previous "filename too long" issue)
+with tempfile.NamedTemporaryFile(delete=False, suffix='.pem') as temp_ca_file:
+    temp_ca_file.write(ti["ssl_ca"].encode('utf-8'))
     temp_ca_path = temp_ca_file.name
 
 db_config = {
@@ -30,15 +30,13 @@ def cleanup_temp():
     if os.path.exists(temp_ca_path):
         os.unlink(temp_ca_path)
 
+# ── Helper function to connect and run query ──
 def get_db_connection():
     return mysql.connector.connect(**db_config)
 
-# ─────────────────────────────────────────
-# ✅ API ENDPOINT (FOR ESP8266)
-# ─────────────────────────────────────────
+# ── API endpoint for ESP8266 (read only) ──
 params = st.query_params
-
-if params.get("api") == "get_pins":
+if params.get("api", [None])[0] == "get_pins":
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -47,32 +45,24 @@ if params.get("api") == "get_pins":
         cursor.close()
         conn.close()
 
-        result = row or {
-            "D0":0,"D1":0,"D2":0,"D3":0,"D4":0,
-            "D5":0,"D6":0,"D7":0,"D8":0
-        }
-
-        st.write(json.dumps(result))
+        result = row or {"D0":0,"D1":0,"D2":0,"D3":0,"D4":0,"D5":0,"D6":0,"D7":0,"D8":0}
+        st.text(json.dumps(result))
         st.stop()
-
     except Exception as e:
-        st.write(json.dumps({"error": str(e)}))
+        st.text(json.dumps({"error": str(e)}))
         st.stop()
-
     finally:
         cleanup_temp()
 
-# ─────────────────────────────────────────
-# 🖥️ NORMAL DASHBOARD UI
-# ─────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
+#               NORMAL DASHBOARD (web UI)
+# ────────────────────────────────────────────────────────────────
 
 st.title("Medical4 Pins Control Panel")
 st.write("Change pin states and save to TiDB Cloud database")
 
-current_pins = {
-    "D0":0,"D1":0,"D2":0,"D3":0,"D4":0,
-    "D5":0,"D6":0,"D7":0,"D8":0
-}
+# ── Read current values ──
+current_pins = {"D0":0,"D1":0,"D2":0,"D3":0,"D4":0,"D5":0,"D6":0,"D7":0,"D8":0}
 
 try:
     conn = get_db_connection()
@@ -86,9 +76,11 @@ try:
 except Exception as e:
     st.error(f"Could not load current pins: {e}")
 
-st.subheader("Current Pin States")
+# ── Display current state ──
+st.subheader("Current Pin States (from database)")
 st.json(current_pins)
 
+# ── Form to update pins ──
 st.subheader("Update Pin States")
 
 with st.form("update_pins_form"):
@@ -116,34 +108,35 @@ with st.form("update_pins_form"):
             conn = get_db_connection()
             cursor = conn.cursor()
 
+            # Assuming there is exactly one row (or we update the first one)
+            # If you have an id column, add WHERE id = 1
             query = """
                 UPDATE pins
                 SET
-                    D0=%s,D1=%s,D2=%s,
-                    D3=%s,D4=%s,D5=%s,
-                    D6=%s,D7=%s,D8=%s
+                    D0 = %s, D1 = %s, D2 = %s,
+                    D3 = %s, D4 = %s, D5 = %s,
+                    D6 = %s, D7 = %s, D8 = %s
                 LIMIT 1
             """
-
-            values = (
-                int(d0), int(d1), int(d2),
-                int(d3), int(d4), int(d5),
-                int(d6), int(d7), int(d8)
-            )
+            values = (int(d0), int(d1), int(d2), int(d3), int(d4),
+                      int(d5), int(d6), int(d7), int(d8))
 
             cursor.execute(query, values)
             conn.commit()
+
             cursor.close()
             conn.close()
 
-            st.success("Pins updated successfully!")
-            st.rerun()
+            st.success("Pins updated successfully in database!")
+            st.rerun()  # Refresh page to show new values
 
         except Exception as e:
-            st.error(f"Update failed: {e}")
+            st.error(f"Failed to update pins: {e}")
 
         finally:
             cleanup_temp()
 
+# ── Info ──
 st.markdown("---")
-st.info("ESP8266 API:\nhttps://mahajanremote5.streamlit.app/?api=get_pins")
+st.info("ESP8266 reads from:\n**https://mahajanremote5.streamlit.app/?api=get_pins**")
+
