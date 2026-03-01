@@ -36,34 +36,20 @@ def get_db_connection():
 
 # ── API endpoint for ESP8266 (read only) ──
 params = st.query_params
-
-# ✅ Correct handling for modern Streamlit
-if params.get("api") == "get_pins":
+if params.get("api", [None])[0] == "get_pins":
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-
-        cursor.execute("""
-            SELECT D0,D1,D2,D3,D4,D5,D6,D7,D8
-            FROM pins
-            ORDER BY id DESC
-            LIMIT 1
-        """)
-
+        cursor.execute("SELECT D0,D1,D2,D3,D4,D5,D6,D7,D8 FROM pins LIMIT 1")
         row = cursor.fetchone()
         cursor.close()
         conn.close()
 
-        result = row if row else {
-            "D0":0,"D1":0,"D2":0,"D3":0,"D4":0,
-            "D5":0,"D6":0,"D7":0,"D8":0
-        }
-
-        st.write(json.dumps(result))
+        result = row or {"D0":0,"D1":0,"D2":0,"D3":0,"D4":0,"D5":0,"D6":0,"D7":0,"D8":0}
+        st.text(json.dumps(result))
         st.stop()
-
     except Exception as e:
-        st.write(json.dumps({"error": str(e)}))
+        st.text(json.dumps({"error": str(e)}))
         st.stop()
     finally:
         cleanup_temp()
@@ -153,5 +139,4 @@ with st.form("update_pins_form"):
 # ── Info ──
 st.markdown("---")
 st.info("ESP8266 reads from:\n**https://mahajanremote5.streamlit.app/?api=get_pins**")
-
 
