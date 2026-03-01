@@ -34,7 +34,8 @@ def get_db_connection():
 # ── API endpoint for ESP8266 (read only) ──
 # Moved to the very top for priority; added print and sys.exit for robust plain JSON output
 params = st.query_params
-if params.get("api", [None])[0] == "get_pins":
+
+if params.get("api") == "get_pins":
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -42,18 +43,14 @@ if params.get("api", [None])[0] == "get_pins":
         row = cursor.fetchone()
         cursor.close()
         conn.close()
+
         result = row or {"D0":0,"D1":0,"D2":0,"D3":0,"D4":0,"D5":0,"D6":0,"D7":0,"D8":0}
-        # Force plain JSON output
-        print(json.dumps(result))  # For Streamlit logs/debugging
         st.text(json.dumps(result))
         st.stop()
-        sys.exit(0)  # Hard exit to prevent any further Streamlit rendering/redirects
+
     except Exception as e:
-        error_resp = json.dumps({"error": str(e)})
-        print(error_resp)
-        st.text(error_resp)
+        st.text(json.dumps({"error": str(e)}))
         st.stop()
-        sys.exit(0)
     finally:
         cleanup_temp()
 
@@ -64,3 +61,4 @@ st.title("Medical4 Pins Control Panel")
 st.write("Change pin states and save to TiDB Cloud database")
 
 # ── Read current values ──
+
