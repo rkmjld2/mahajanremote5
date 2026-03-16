@@ -3,6 +3,6 @@ mysql-connector-python>=8.0.0
 pandas>=2.0.0   # if you use dataframes
 flask
 gunicorn   # for production
-
+SQLAlchemy>=2.0.48,<2.1
 
 
