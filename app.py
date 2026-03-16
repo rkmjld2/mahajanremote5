@@ -1,31 +1,16 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, text
-import os
+from sqlalchemy import text
 
 # ────────────────────────────────────────────────
-# TiDB connection (cached)
+# Use st.connection (preferred modern way)
 # ────────────────────────────────────────────────
 @st.cache_resource
-def get_db_connection():
-    try:
-        # Build connection URL
-        secrets = st.secrets["tidb"]
-        db_url = (
-            f"mysql+mysqlconnector://"
-            f"{secrets['username']}:{secrets['password']}"
-            f"@{secrets['host']}:{secrets['port']}/"
-            f"{secrets['database']}"
-            f"?charset=utf8mb4&ssl_ca={secrets.get('ssl_ca', '')}"
-        )
-        engine = create_engine(db_url, connect_args={"connect_timeout": 10})
-        # Quick test connection on first creation
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return engine
-    except Exception as e:
-        st.error(f"Failed to create database connection: {str(e)}")
-        st.stop()
+def get_connection():
+    return st.connection("tidb", type="sql")
+
+
+conn = get_connection()
 
 
 # ────────────────────────────────────────────────
@@ -33,20 +18,18 @@ def get_db_connection():
 # ────────────────────────────────────────────────
 if "api" in st.query_params and st.query_params["api"][0] == "get_pins":
     try:
-        engine = get_db_connection()
-        
-        query = text("""
+        query = """
             SELECT D0, D1, D2, D3, D4, D5, D6, D7, D8
             FROM pins
             ORDER BY id DESC
             LIMIT 1
-        """)
+        """
         
-        df = pd.read_sql(query, engine)
+        df = conn.query(query, ttl=60)  # cache 60 seconds – adjust as needed
         
         if not df.empty:
             row = df.iloc[0].to_dict()
-            # Convert everything to string (consistent with your old PHP behavior)
+            # Convert to string (like your old PHP output)
             row = {k: str(v) if v is not None else None for k, v in row.items()}
             st.json(row)
         else:
@@ -55,33 +38,31 @@ if "api" in st.query_params and st.query_params["api"][0] == "get_pins":
     except Exception as e:
         st.json({"error": f"Server error: {str(e)}"})
     
-    st.stop()  # Prevent normal app from rendering
+    st.stop()  # Stop rendering the normal UI
 
 
 # ────────────────────────────────────────────────
-# Normal Streamlit app (only reached if not API call)
+# Normal Streamlit app
 # ────────────────────────────────────────────────
 st.title("Welcome to Medical4 App")
 
-# ── Add some debug / status info (remove later if you want clean UI) ──
 with st.expander("Debug Info", expanded=False):
     st.write("Streamlit version:", st.__version__)
-    if "tidb" in st.secrets:
-        st.success("TiDB secrets found")
+    if "tidb" in st.secrets.get("connections", {}):
+        st.success("TiDB connection config found")
     else:
-        st.warning("TiDB secrets section not found in secrets.toml")
+        st.warning("TiDB connection config missing – check secrets")
 
-# Example: show last pin if you want (optional)
+
 if st.button("Show latest pin record"):
     try:
-        engine = get_db_connection()
-        query = text("""
+        query = """
             SELECT D0, D1, D2, D3, D4, D5, D6, D7, D8
             FROM pins
             ORDER BY id DESC
             LIMIT 1
-        """)
-        df = pd.read_sql(query, engine)
+        """
+        df = conn.query(query)
         if not df.empty:
             st.dataframe(df)
         else:
