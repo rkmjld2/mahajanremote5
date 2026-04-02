@@ -188,7 +188,37 @@ def search_by_query():
     except Exception as e:
         print("CUSTOM QUERY ERROR:", e)
         return jsonify({"error": str(e)})
+#............................
+@app.route("/api/status")
+def status():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
 
+        cursor.execute("""
+            SELECT timestamp FROM sensor_db
+            ORDER BY id DESC LIMIT 1
+        """)
+        row = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        if not row:
+            return jsonify({"status": "disconnected"})
+
+        last = row["timestamp"]
+        now = datetime.utcnow()
+
+        diff = (now - last).total_seconds()
+
+        if diff < 15:
+            return jsonify({"status": "connected"})
+        else:
+            return jsonify({"status": "disconnected"})
+
+    except:
+        return jsonify({"status": "disconnected"})
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
