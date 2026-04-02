@@ -1,169 +1,195 @@
-import streamlit as st
-import pandas as pd
-from sqlalchemy import create_engine, text
+from flask import Flask, request, jsonify, render_template
+import mysql.connector
 import os
+from datetime import datetime, timezone, timedelta
 
-# ────────────────────────────────────────────────
-# TiDB connection (cached – production-safe with embedded cert)
-# ────────────────────────────────────────────────
-@st.cache_resource
+app = Flask(__name__)
+
+# ---------- DATABASE CONNECTION ----------
 def get_db_connection():
+    return mysql.connector.connect(
+        host=os.environ.get("DB_HOST"),
+        port=int(os.environ.get("DB_PORT", 4000)),
+        user=os.environ.get("DB_USER"),
+        password=os.environ.get("DB_PASSWORD"),
+        database=os.environ.get("DB_NAME"),
+        autocommit=True,
+    )
+
+# ---------- API KEY ----------
+API_KEY = os.environ.get("SECRET_KEY")
+
+# ---------- HOME ----------
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+
+# ---------- RECEIVE DATA FROM ESP ----------
+@app.route("/api/data")
+def receive_data():
     try:
-        secrets = st.secrets["tidb"]
-        
-        # Get embedded CA certificate content (multi-line string from secrets.toml)
-        ca_content = secrets.get("ca_cert", "")
-        if not ca_content:
-            raise ValueError("Missing 'ca_cert' in secrets.toml – please embed the full PEM certificate content")
-        
-        connect_args = {
-            "ssl_ca": ca_content,           # Pass as string (mysql-connector-python accepts this)
-            "connect_timeout": 10,
-        }
-        
-        db_url = (
-            f"mysql+mysqlconnector://"
-            f"{secrets['username']}:{secrets['password']}"
-            f"@{secrets['host']}:{secrets['port']}/"
-            f"{secrets['database']}"
-            "?charset=utf8mb4"
-        )
-        
-        engine = create_engine(db_url, connect_args=connect_args)
-        
-        # Quick test connection
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        
-        return engine
-    
+        key = request.args.get("key", "").strip()
+
+        if key != (API_KEY or "").strip():
+            return jsonify({"status": "unauthorized"}), 403
+
+        s1 = request.args.get("s1")
+        s2 = request.args.get("s2")
+        s3 = request.args.get("s3")
+
+        if not s1 or not s2 or not s3:
+            return jsonify({"status": "missing data"})
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        query = """
+        INSERT INTO sensor_db (sensor1, sensor2, sensor3, timestamp)
+        VALUES (%s, %s, %s, NOW())
+        """
+
+        cursor.execute(query, (s1, s2, s3))
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({"status": "success"})
+
     except Exception as e:
-        st.error(f"Failed to create database connection: {str(e)}")
-        st.stop()
+        print("INSERT ERROR:", e)
+        return jsonify({"status": "error", "message": str(e)})
 
 
-# ────────────────────────────────────────────────
-# Public API endpoint: ?api=get_pins → returns JSON
-# ────────────────────────────────────────────────
-if "api" in st.query_params and st.query_params["api"][0] == "get_pins":
+# ---------- GET LATEST DATA ----------
+@app.route("/api/getdata")
+def get_data():
     try:
-        engine = get_db_connection()
-        
-        query = text("""
-            SELECT D0, D1, D2, D3, D4, D5, D6, D7, D8
-            FROM pins
-            ORDER BY id DESC
-            LIMIT 1
-        """)
-        
-        df = pd.read_sql(query, engine)
-        
-        if not df.empty:
-            row = df.iloc[0].to_dict()
-            # Convert to string (clean output, consistent with old PHP)
-            row = {k: str(v) if v is not None else None for k, v in row.items()}
-            st.json(row)
-        else:
-            st.json({"error": "No records found in pins table"})
-            
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+        SELECT id, sensor1, sensor2, sensor3, timestamp
+        FROM sensor_db
+        ORDER BY id DESC
+        LIMIT 100
+        """
+
+        cursor.execute(query)
+        data = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        # Convert UTC → IST
+        for row in data:
+            if row["timestamp"]:
+                dt = row["timestamp"].replace(tzinfo=timezone.utc)
+                ist = dt + timedelta(hours=5, minutes=30)
+                row["timestamp"] = ist.strftime("%d/%m/%Y %H:%M:%S")
+
+        return jsonify(data)
+
     except Exception as e:
-        st.json({"error": f"Server error: {str(e)}"})
-    
-    st.stop()  # Prevent normal app UI from rendering
+        print("FETCH ERROR:", e)
+        return jsonify([])
 
 
-# ────────────────────────────────────────────────
-# Normal Streamlit app (main UI)
-# ────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Medical4 App",
-    page_icon="🏥",
-    layout="wide"
-)
+# ---------- SEARCH BY DATE ----------
+@app.route("/api/search/date")
+def search_by_date():
+    try:
+        start = request.args.get("start")
+        end = request.args.get("end")
 
-# Sidebar navigation
-st.sidebar.title("Medical4 App")
-st.sidebar.markdown("Welcome, Ravi!")
-page = st.sidebar.radio("Go to", ["Home", "Latest Pin Record", "About"])
+        if not start or not end:
+            return jsonify([])
 
-if page == "Home":
-    st.title("🏥 Welcome to Medical4 App")
-    st.markdown("""
-    This is your medical data dashboard powered by TiDB Cloud + Streamlit.
-    
-    - View the latest pin record
-    - API endpoint: `?api=get_pins`
-    - More features coming soon (patient forms, charts, login, etc.)
-    """)
-    
-    with st.expander("Debug & Status", expanded=False):
-        st.write("Streamlit version:", st.__version__)
-        if "tidb" in st.secrets:
-            st.success("TiDB secrets section found ✓")
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+        SELECT id, sensor1, sensor2, sensor3, timestamp
+        FROM sensor_db
+        WHERE timestamp BETWEEN %s AND %s
+        ORDER BY id DESC
+        """
+
+        cursor.execute(query, (start, end))
+        data = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        # Convert UTC → IST
+        for row in data:
+            if row["timestamp"]:
+                dt = row["timestamp"].replace(tzinfo=timezone.utc)
+                ist = dt + timedelta(hours=5, minutes=30)
+                row["timestamp"] = ist.strftime("%d/%m/%Y %H:%M:%S")
+
+        return jsonify(data)
+
+    except Exception as e:
+        print("DATE SEARCH ERROR:", e)
+        return jsonify([])
+
+
+# ---------- CUSTOM QUERY ----------
+@app.route("/api/search/query")
+def search_by_query():
+    try:
+        q = request.args.get("q", "").strip()
+
+        if not q:
+            return jsonify({"error": "query is empty"})
+
+        lower = q.lower()
+
+        # Block dangerous queries
+        if any(k in lower for k in ("drop ", "truncate ", "alter ", "create ")):
+            return jsonify({"error": "dangerous query blocked"})
+
+        # Allow only safe operations
+        if not (
+            lower.startswith("select") or
+            lower.startswith("delete") or
+            lower.startswith("update")
+        ):
+            return jsonify({"error": "only SELECT/DELETE/UPDATE allowed"})
+
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute(q)
+
+        if lower.startswith("select"):
+            rows = cursor.fetchall()
         else:
-            st.warning("TiDB secrets section not found in secrets.toml")
-        
-        try:
-            engine = get_db_connection()
-            st.success("Database connection successful ✓")
-        except Exception as e:
-            st.error(f"Connection test failed: {str(e)}")
+            conn.commit()
+            return jsonify({
+                "status": "success",
+                "rows_affected": cursor.rowcount
+            })
+
+        cursor.close()
+        conn.close()
+
+        # Format timestamp
+        for row in rows:
+            if "timestamp" in row and row["timestamp"]:
+                dt = row["timestamp"].replace(tzinfo=timezone.utc)
+                ist = dt + timedelta(hours=5, minutes=30)
+                row["timestamp"] = ist.strftime("%d/%m/%Y %H:%M:%S")
+
+        return jsonify(rows)
+
+    except Exception as e:
+        print("CUSTOM QUERY ERROR:", e)
+        return jsonify({"error": str(e)})
 
 
-elif page == "Latest Pin Record":
-    st.title("Latest Pin Record")
-    
-    if st.button("Refresh Latest Record", type="primary"):
-        with st.spinner("Fetching from TiDB..."):
-            try:
-                engine = get_db_connection()
-                query = text("""
-                    SELECT D0, D1, D2, D3, D4, D5, D6, D7, D8
-                    FROM pins
-                    ORDER BY id DESC
-                    LIMIT 1
-                """)
-                df = pd.read_sql(query, engine)
-                
-                if not df.empty:
-                    st.success("Record loaded successfully!")
-                    st.dataframe(df, use_container_width=True)
-                    
-                    # Show as nice key-value cards
-                    st.subheader("Details")
-                    cols = st.columns(3)
-                    row = df.iloc[0]
-                    for i, col_name in enumerate(["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]):
-                        with cols[i % 3]:
-                            st.metric(col_name, row[col_name])
-                else:
-                    st.info("No records found in the 'pins' table.")
-                    
-            except Exception as e:
-                st.error(f"Database error: {str(e)}")
-
-
-elif page == "About":
-    st.title("About Medical4 App")
-    st.markdown("""
-    ### Purpose
-    Medical4 App is a simple dashboard to view and manage medical-related pin data stored in TiDB Cloud.
-    
-    ### Features (current)
-    - Public JSON API (`?api=get_pins`)
-    - Display latest record
-    - Secure connection using embedded SSL certificate
-    
-    ### Planned
-    - User login / authentication
-    - Add new records via form
-    - Charts & analytics
-    - Export to CSV/PDF
-    
-    Contact: Ravi (Ludhiana)
-    """)
-
-
-# Footer
-st.markdown("---")
-st.caption("© 2026 Medical4 App | Powered by Streamlit + TiDB Cloud")
+# ---------- MAIN ----------
+if __name__ == "__main__":
+    app.run(debug=True)
